@@ -9,3 +9,5 @@ log_open.py: module that monkey patches __builtin__.open and
 debug_logger.py: sets up a log handler for stdout, and has a colorized
                  log formatted. Sometimes useful for tracking down
                  threading issues, etc
+
+showmodules.py: uses modulefinder to show the modules loaded
