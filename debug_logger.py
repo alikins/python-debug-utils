@@ -6,6 +6,10 @@ import logging
 # quick thread debugging (hahaha...)
 #
 
+# TODO: add a Filter or LoggingAdapter that adds a record attribute for parent pid
+#       (and maybe thread group/process group/cgroup ?)
+
+
 class ColorFormatter(logging.Formatter):
     FORMAT = ("[$BOLD%(name)-20s$RESET][%(levelname)-18s]  "
               "%(message)s "
@@ -19,18 +23,19 @@ class ColorFormatter(logging.Formatter):
     funcName = u""
     processName = u""
 
-    FORMAT = (u"""$BOLD[%(levelname)s]$RESET """
+    FORMAT = (u"""[%(levelname)s] """
               """%(asctime)-15s """
 #              """\033[1;35m%(name)s$RESET """
 #              """%(processName)s """
-              """[tid: \033[32m%(thread)d$RESET tname:\033[32m%(threadName)s]$RESET """
+              """%(processName)s %(process)d """
+              """[tid: %(thread)d tname:%(threadName)s """
+              #              """[tid: \033[32m%(thread)d$RESET tname:\033[32m%(threadName)s]$RESET """
 #              """%(module)s """
               """@%(filename)s"""
 #              """%(funcName)s()"""
               """:%(lineno)d """
-              """- %(message)s""")
-              #              """- $BOLD%(message)s$RESET""")
-
+              """- %(_dlc_threadName)sthread_name_color%(reset)s %(message)s""")
+#              """- $BOLD%(message)s$RESET""")
 
     COLORS = {
         'WARNING': YELLOW,
@@ -40,44 +45,110 @@ class ColorFormatter(logging.Formatter):
         'ERROR': RED
     }
     # \ x 1 b [ 38 ; 5; 231m
-    THREAD_COLORS = dict((color_number, color_seq) for \
-                         (color_number, color_seq) in [(x, "\033[38;5;%dm" % (x+16)) for x in range(220)])
+    THREAD_COLORS = dict((color_number, color_seq) for
+                         (color_number, color_seq) in [(x, "\033[38;5;%dm" % (x + 16)) for x in range(220)])
 
     #print THREAD_COLORS
     #print "foo %s slip %s blip %s" % (THREAD_COLORS[0], THREAD_COLORS[1], RESET_SEQ)
-    def formatter_msg(self, msg, use_color=True):
+    # TODO: -> transform_format_string
+    #       expand format sting to include color record attributes, and let self.format add/tweak the attributes
+    # note: python-coloredlogs ColoredFormatter does something similar
+    def formatter_msg(self, fmt, use_color=True):
         # do color stuff here if we want $RED in format string
+        # if auto_format: ?
+        # TODO: transform '%(thread)d' -> '%(threadColor)s%(thread)d%(reset)s'
         if use_color:
-            msg = msg.replace("$RESET", self.RESET_SEQ).replace("$BOLD", self.BOLD_SEQ)
+            fmt = fmt.replace("$RESET", self.RESET_SEQ).replace("$BOLD", self.BOLD_SEQ)
         else:
-            msg = msg.replace("$RESET", "").replace("$BOLD", "")
-        return msg
+            fmt = fmt.replace("$RESET", "").replace("$BOLD", "")
+        return fmt
 
-    def __init__(self, use_color=True):
-        msg = self.formatter_msg(self.FORMAT, use_color)
-        logging.Formatter.__init__(self, msg)
+    # A little weird...
+    @property
+    def _fmt(self):
+        if not self._color_fmt:
+            #self._color_fmt = self._base_fmt % self._efmt
+            self._color_fmt = self._extend_format(self._base_fmt)
+            # self._color_fmt = self.formatter_msg(self._base_fmt, use_color=self.use_color)
+        return self._color_fmt
+
+    @_fmt.setter
+    def _fmt(self, value):
+        self._base_fmt = value
+        self._color_fmt = None
+
+    def __init__(self, fmt=None, use_color=True):
+        fmt = fmt or self.FORMAT
+        # color_fmt = self.formatter_msg(fmt, use_color)
+        #logging.Formatter.__init__(self, color_fmt)
+        logging.Formatter.__init__(self, fmt)
+        self._base_fmt = fmt
+        self._color_fmt = None
+        self._color_fmt = self._extend_format(self._base_fmt)
         self.use_color = use_color
 
         self.thread_counter = 0
         self.use_thread_color = False
 
+        #import pprint
+        #self._efmt = self._build_color_format_dict()
+        #pprint.pprint(self._efmt)
+
+    def _extend_format(self, format_string):
+
+        c_attrs = [('%(process)d', 'process'),
+                   ('%(processName)s', 'processName'),
+                   ('%(thread)d', 'thread'),
+                   ('%(threadName)s', 'threadName')]
+
+        for c_attr, c_attr_short in c_attrs:
+            format_string = format_string.replace(c_attr, '%%(_dlc_%s)s%s%%(reset)s' % (c_attr_short, c_attr))
+
+        return format_string
+
+    # TODO: rename and generalize
+    # TODO: tie tid/threadName and process/processName together so they start same color
+    #       so MainProcess, the first pid/processName are same, and maybe MainThread//first tid
+    # DOWNSIDE: requires tracking all seen pid/process/tid/threadName ? that could be odd with multi-processes with multi instances
+    #           of the Formatter
+    # TODO: make so a given first ProcessName will always start the same color (so multiple runs are consistent)
+    # TODO: make 'msg' use the most specific combo of pid/processName/tid/threadName
+    # TODO: generalize so it will for logger name as well
+    # MAYBE: color hiearchy for logger names? so 'foo.model' and 'foo.util' are related...
+    #        maybe split on '.' and set initial color based on hash of sub logger name?
     def get_thread_color(self, threadid):
+        # 220 is useable 256 color term color (forget where that comes from? some min delta-e division of 8x8x8 rgb colorspace?)
         thread_mod = threadid % 220
         #print threadid, thread_mod % 220
         return self.THREAD_COLORS[thread_mod]
 
+    # TODO: maybe add a Filter that sets a record attribute for process/pid/thread/tid color that formatter would use
+    #       (that would let formatter string do '%(theadNameColor)s tname=%(threadName)s %(reset)s %(processColor)s pid=%(process)d%(reset)s'
+    #       so that the entire blurb about process info matches instead of just the attribute
+    #       - also allows format to just expand a '%(threadName)s' in fmt string to '%(theadNameColor)s%(threadName)s%(reset)s' before regular formatter
+    # DOWNSIDE: Filter would need to be attach to the Logger not the Handler
     def format(self, record):
+        record.reset = self.RESET_SEQ
         levelname = record.levelname
+
         if self.use_color and levelname in self.COLORS:
             fore_color = 30 + self.COLORS[levelname]
             levelname_color = self.COLOR_SEQ % fore_color + levelname + self.RESET_SEQ
             record.levelname = levelname_color
+
         if self.use_color and self.use_thread_color:
-            fore_color_seq = self.get_thread_color(record.thread)
+            thread_color = self.get_thread_color(record.thread)
+            process_color = self.get_thread_color(record.process)
+            record._dlc_process = process_color
+            record._dlc_processName = process_color
         #    print "%s foo %s%s" % (fore_color_seq, record.msg, self.RESET_SEQ)
-            msg = "%s%s%s" % (fore_color_seq, record.msg, self.RESET_SEQ)
+            #record.threadName = "%s%s%s" % (fore_color_seq, record.threadName, self.RESET_SEQ)
+            record._dlc_threadName = thread_color
+            record._dlc_thread = thread_color
+            #msg = "%s%s%s" % (fore_color_seq, record.msg, self.RESET_SEQ)
             #msg = "%s%s%s" % ('', record.msg, '')
-            record.msg = msg
+            #record.msg = msg
+
         return logging.Formatter.format(self, record)
 
 
@@ -92,5 +163,5 @@ def _get_handler():
 
     return handler
 
-logging.getLogger().setLevel(logging.DEBUG)
-logging.getLogger().addHandler(_get_handler())
+#logging.getLogger().setLevel(logging.DEBUG)
+#logging.getLogger().addHandler(_get_handler())
