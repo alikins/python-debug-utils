@@ -24,7 +24,8 @@ def context_color_format_string(format_string):
     c_attrs = [('%(process)d', 'process'),
                 ('%(processName)s', 'processName'),
                 ('%(thread)d', 'thread'),
-                ('%(threadName)s', 'threadName')]
+                ('%(threadName)s', 'threadName'),
+                ('%(levelname)s', 'levelname')]
 
     for c_attr, c_attr_short in c_attrs:
         format_string = format_string.replace(c_attr, '%%(_dlc_%s)s%s%%(reset)s' % (c_attr_short, c_attr))
@@ -61,30 +62,27 @@ class ColorFormatter(logging.Formatter):
 
     COLORS = {
         'WARNING': YELLOW,
-        'INFO': YELLOW,
+        'INFO': GREEN,
         'DEBUG': BLUE,
         'CRITICAL': YELLOW,
         'ERROR': RED
     }
+
+    BASE_COLORS = dict((color_number, color_seq) for
+                       (color_number, color_seq) in [(x, "\033[38;5;%dm" % x) for x in range(8)])
     # \ x 1 b [ 38 ; 5; 231m
     THREAD_COLORS = dict((color_number, color_seq) for
                          (color_number, color_seq) in [(x, "\033[38;5;%dm" % (x + 16)) for x in range(220)])
 
-    #print THREAD_COLORS
-    #print "foo %s slip %s blip %s" % (THREAD_COLORS[0], THREAD_COLORS[1], RESET_SEQ)
-    # TODO: -> transform_format_string
-    #       expand format sting to include color record attributes, and let self.format add/tweak the attributes
-    # note: python-coloredlogs ColoredFormatter does something similar
-    def formatter_msg(self, fmt, use_color=True):
-        # do color stuff here if we want $RED in format string
-        # if auto_format: ?
-        # TODO: transform '%(thread)d' -> '%(threadColor)s%(thread)d%(reset)s'
-        if use_color:
-            fmt = fmt.replace("$RESET", self.RESET_SEQ).replace("$BOLD", self.BOLD_SEQ)
-        else:
-            fmt = fmt.replace("$RESET", "").replace("$BOLD", "")
-        return fmt
-
+    LEVEL_COLORS = {'TRACE': BASE_COLORS[BLUE],
+                    'SUBDEBUG': BASE_COLORS[BLUE],
+                    'DEBUG': BASE_COLORS[BLUE],
+                    'INFO': BASE_COLORS[GREEN],
+                    'SUBWARNING': BASE_COLORS[YELLOW],
+                    'WARNING': BASE_COLORS[YELLOW],
+                    'ERROR': BASE_COLORS[RED],
+                    # bold red?
+                    'CRITICAL': BASE_COLORS[RED]}
     # A little weird...
     @property
     def _fmt(self):
@@ -117,18 +115,40 @@ class ColorFormatter(logging.Formatter):
     # MAYBE: color hiearchy for logger names? so 'foo.model' and 'foo.util' are related...
     #        maybe split on '.' and set initial color based on hash of sub logger name?
     # SEEALSO: chromalog module does something similar, may be easiest to extend
+    # TODO: this could be own class/methods like ContextColor(log_record) that returns color info
     def get_thread_color(self, threadid):
         # 220 is useable 256 color term color (forget where that comes from? some min delta-e division of 8x8x8 rgb colorspace?)
         thread_mod = threadid % 220
         #print threadid, thread_mod % 220
         return self.THREAD_COLORS[thread_mod]
 
+    # TODO: This could special case 'MainThread'/'MainProcess' to pick a good predictable color
     def get_name_color(self, name):
         name_hash = hash(name)
         name_mod = name_hash % 220
         return self.THREAD_COLORS[name_mod]
 
+    def get_level_color(self, levelname):
+        if levelname not in self.LEVEL_COLORS:
+            return
+        level_color = self.LEVEL_COLORS[levelname]
+        return level_color
+
     def get_process_colors(self, pname, pid, tname, tid):
+        '''Given process/thread info, return reasonable colors for them.
+
+        Roughly:
+
+            - attempts to get a unique color per processName
+            - attempts to get a unique color per pid
+                - attempt to make those the same for MainProcess
+                - any other processName, the pname color and the pid color cann be different
+            - if threadName is 'MainThread', make tname_color and tid_color match MainProcess pname_color and pid_color
+            - other threadNames get a new color and new tid_color
+
+            Existing get_*color_ methods attempt to divy up colors by mod 220 on tid/pid, or mod 220 on hash of thread or pid name
+            NOTE: This doesn't track any state so there is no ordering or prefence to the colors given out.
+        '''
         #pprint.pprint(self._efmt)
         pname_color = self.get_name_color(pname)
         if pname == 'MainProcess':
@@ -154,27 +174,19 @@ class ColorFormatter(logging.Formatter):
         record.reset = self.RESET_SEQ
         levelname = record.levelname
 
-        if self.use_color and levelname in self.COLORS:
-            fore_color = 30 + self.COLORS[levelname]
-            levelname_color = self.COLOR_SEQ % fore_color + levelname + self.RESET_SEQ
-            record.levelname = levelname_color
+        if self.use_color:
+            level_color = self.get_level_color(levelname)
+            record._dlc_levelname = level_color
 
         if self.use_color and self.use_thread_color:
-            thread_color = self.get_thread_color(record.thread)
-            process_color = self.get_thread_color(record.process)
-            #pname_color, pid_color = self.get_process_colors(record.processName, record.process)
             pname_color, pid_color, tname_color, tid_color = self.get_process_colors(record.processName, record.process, record.threadName, record.thread)
+
+            # NOTE: and here is where we currently mutate the existing log record (we add attributes to it).
+            # TODO: create a new/copy LogRecord, and only use it to pass to our use of logging.Formatter.format()
             record._dlc_process = pid_color
             record._dlc_processName = pname_color
             record._dlc_thread = tid_color
             record._dlc_threadName =tname_color
-        #    print "%s foo %s%s" % (fore_color_seq, record.msg, self.RESET_SEQ)
-            #record.threadName = "%s%s%s" % (fore_color_seq, record.threadName, self.RESET_SEQ)
-            #record._dlc_threadName = self.get_name_color(record.threadName)
-            #record._dlc_thread = thread_color
-            #msg = "%s%s%s" % (fore_color_seq, record.msg, self.RESET_SEQ)
-            #msg = "%s%s%s" % ('', record.msg, '')
-            #record.msg = msg
 
         return logging.Formatter.format(self, record)
 
