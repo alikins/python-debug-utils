@@ -10,6 +10,28 @@ import logging
 #       (and maybe thread group/process group/cgroup ?)
 
 
+def context_color_format_string(format_string):
+    '''For extending a format string for logging.Formatter to include attributes with color info.
+
+    ie, '%(process)d %(threadName)s - %(msg)'
+
+    becomes
+
+    '%(_dlc_process)s%(process)d%(_dlc_reset)s %(_dlc_threadName)%(threadName)s%(_dlc_reset)s - %(msg)'
+
+    Note that adding those log record attributes is left to... <FIXME>.
+    '''
+    c_attrs = [('%(process)d', 'process'),
+                ('%(processName)s', 'processName'),
+                ('%(thread)d', 'thread'),
+                ('%(threadName)s', 'threadName')]
+
+    for c_attr, c_attr_short in c_attrs:
+        format_string = format_string.replace(c_attr, '%%(_dlc_%s)s%s%%(reset)s' % (c_attr_short, c_attr))
+
+    return format_string
+
+
 class ColorFormatter(logging.Formatter):
     FORMAT = ("[$BOLD%(name)-20s$RESET][%(levelname)-18s]  "
               "%(message)s "
@@ -67,9 +89,7 @@ class ColorFormatter(logging.Formatter):
     @property
     def _fmt(self):
         if not self._color_fmt:
-            #self._color_fmt = self._base_fmt % self._efmt
-            self._color_fmt = self._extend_format(self._base_fmt)
-            # self._color_fmt = self.formatter_msg(self._base_fmt, use_color=self.use_color)
+            self._color_fmt = context_color_format_string(self._base_fmt)
         return self._color_fmt
 
     @_fmt.setter
@@ -79,32 +99,12 @@ class ColorFormatter(logging.Formatter):
 
     def __init__(self, fmt=None, use_color=True):
         fmt = fmt or self.FORMAT
-        # color_fmt = self.formatter_msg(fmt, use_color)
-        #logging.Formatter.__init__(self, color_fmt)
         logging.Formatter.__init__(self, fmt)
         self._base_fmt = fmt
-        self._color_fmt = None
-        self._color_fmt = self._extend_format(self._base_fmt)
         self.use_color = use_color
 
         self.thread_counter = 0
         self.use_thread_color = False
-
-        #import pprint
-        #self._efmt = self._build_color_format_dict()
-        #pprint.pprint(self._efmt)
-
-    def _extend_format(self, format_string):
-
-        c_attrs = [('%(process)d', 'process'),
-                   ('%(processName)s', 'processName'),
-                   ('%(thread)d', 'thread'),
-                   ('%(threadName)s', 'threadName')]
-
-        for c_attr, c_attr_short in c_attrs:
-            format_string = format_string.replace(c_attr, '%%(_dlc_%s)s%s%%(reset)s' % (c_attr_short, c_attr))
-
-        return format_string
 
     # TODO: rename and generalize
     # TODO: tie tid/threadName and process/processName together so they start same color
@@ -116,11 +116,34 @@ class ColorFormatter(logging.Formatter):
     # TODO: generalize so it will for logger name as well
     # MAYBE: color hiearchy for logger names? so 'foo.model' and 'foo.util' are related...
     #        maybe split on '.' and set initial color based on hash of sub logger name?
+    # SEEALSO: chromalog module does something similar, may be easiest to extend
     def get_thread_color(self, threadid):
         # 220 is useable 256 color term color (forget where that comes from? some min delta-e division of 8x8x8 rgb colorspace?)
         thread_mod = threadid % 220
         #print threadid, thread_mod % 220
         return self.THREAD_COLORS[thread_mod]
+
+    def get_name_color(self, name):
+        name_hash = hash(name)
+        name_mod = name_hash % 220
+        return self.THREAD_COLORS[name_mod]
+
+    def get_process_colors(self, pname, pid, tname, tid):
+        #pprint.pprint(self._efmt)
+        pname_color = self.get_name_color(pname)
+        if pname == 'MainProcess':
+            pid_color = pname_color
+        else:
+            pid_color = self.get_thread_color(pid)
+
+        if tname == 'MainThread':
+            tname_color = pname_color
+            tid_color = tname_color
+        else:
+            tname_color = self.get_name_color(tname)
+            tid_color = self.get_thread_color(tid)
+
+        return pname_color, pid_color, tname_color, tid_color
 
     # TODO: maybe add a Filter that sets a record attribute for process/pid/thread/tid color that formatter would use
     #       (that would let formatter string do '%(theadNameColor)s tname=%(threadName)s %(reset)s %(processColor)s pid=%(process)d%(reset)s'
@@ -139,12 +162,16 @@ class ColorFormatter(logging.Formatter):
         if self.use_color and self.use_thread_color:
             thread_color = self.get_thread_color(record.thread)
             process_color = self.get_thread_color(record.process)
-            record._dlc_process = process_color
-            record._dlc_processName = process_color
+            #pname_color, pid_color = self.get_process_colors(record.processName, record.process)
+            pname_color, pid_color, tname_color, tid_color = self.get_process_colors(record.processName, record.process, record.threadName, record.thread)
+            record._dlc_process = pid_color
+            record._dlc_processName = pname_color
+            record._dlc_thread = tid_color
+            record._dlc_threadName =tname_color
         #    print "%s foo %s%s" % (fore_color_seq, record.msg, self.RESET_SEQ)
             #record.threadName = "%s%s%s" % (fore_color_seq, record.threadName, self.RESET_SEQ)
-            record._dlc_threadName = thread_color
-            record._dlc_thread = thread_color
+            #record._dlc_threadName = self.get_name_color(record.threadName)
+            #record._dlc_thread = thread_color
             #msg = "%s%s%s" % (fore_color_seq, record.msg, self.RESET_SEQ)
             #msg = "%s%s%s" % ('', record.msg, '')
             #record.msg = msg
