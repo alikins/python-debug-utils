@@ -1,4 +1,6 @@
 import logging
+import re
+import sys
 
 # import this module to dump colories DEBUG level logging on stdout
 #
@@ -21,14 +23,38 @@ def context_color_format_string(format_string):
 
     Note that adding those log record attributes is left to... <FIXME>.
     '''
-    c_attrs = [('%(process)d', 'process'),
-                ('%(processName)s', 'processName'),
-                ('%(thread)d', 'thread'),
-                ('%(threadName)s', 'threadName'),
-                ('%(levelname)s', 'levelname')]
+    # This is not very smart atm. Using format specifiers will break it. Really need to
+    # parse/tokenise the format string, and build it back with our tweaks eventually
+    # or possible regex instead of replace (s/(%\(process\).*d)/%(_dlc_process)<group 1>%(reset) etc)
 
-    for c_attr, c_attr_short in c_attrs:
-        format_string = format_string.replace(c_attr, '%%(_dlc_%s)s%s%%(reset)s' % (c_attr_short, c_attr))
+    # (%\(process\).*?d)
+    c_attrs = [('%(process)d', 'process', '(%\(process\).*?d)'),
+                ('%(processName)s', 'processName', 'adfad'),
+                ('%(thread)d', 'thread', 'adfad'),
+                ('%(threadName)s', 'threadName', 'adfad'),
+                ('%(levelname)s', 'levelname', 'aasdf')]
+
+    color_attrs = ['process', 'processName', 'levelname', 'threadName', 'thread', 'message']
+
+    color_attrs_string = '|'.join(color_attrs)
+    print('color_attrs_string=%s' % color_attrs_string)
+    re_string = "(?P<full_attr>%\((?P<attr_name>" + color_attrs_string + "%s?)\).*?[dsf])"
+    print('re_string=%s' % re_string)
+    color_format_re = re.compile(re_string)
+    replacement = "%(_cdl_\g<attr_name>)s\g<full_attr>%(_cdl_reset)s"
+    format_string = color_format_re.sub(replacement, format_string)
+    print('format_string=%s' % format_string)
+
+    return format_string
+
+    for c_attr, c_attr_short, c_re in c_attrs:
+        r_attr = '%%(_dlc_%s)s' % c_attr_short
+        reset_attr = '%(reset)s'
+        repl_string = r_attr + '\g<1>' + reset_attr
+        print('repl_string=%s' % repl_string)
+        format_string = re.sub(c_re, repl_string, format_string)
+        print('format_string=%s' % format_string)
+        #format_string = format_string.replace(c_attr, '%%(_dlc_%s)s%s%%(reset)s' % (c_attr_short, c_attr))
 
     return format_string
 
@@ -46,18 +72,18 @@ class ColorFormatter(logging.Formatter):
     funcName = u""
     processName = u""
 
-    FORMAT = (u"""[%(levelname)s] """
-              """%(asctime)-15s """
+    FORMAT = ("""%(asctime)-15s """
+              """[%(levelname)-8s] """
 #              """\033[1;35m%(name)s$RESET """
 #              """%(processName)s """
-              """%(processName)s %(process)d """
-              """[tid: %(thread)d tname:%(threadName)s """
+              """%(processName)-15s %(process)5d """
+              """[tid: %(thread)d tname:%(threadName)-15s """
               #              """[tid: \033[32m%(thread)d$RESET tname:\033[32m%(threadName)s]$RESET """
 #              """%(module)s """
               """@%(filename)s"""
 #              """%(funcName)s()"""
-              """:%(lineno)d """
-              """- %(_dlc_threadName)sthread_name_color%(reset)s %(message)s""")
+              """:%(lineno)-4d """
+              """- %(_cdl_threadName)sthread_name_color%(_cdl_reset)s %(message)s""")
 #              """- $BOLD%(message)s$RESET""")
 
     COLORS = {
@@ -103,6 +129,7 @@ class ColorFormatter(logging.Formatter):
 
         self.thread_counter = 0
         self.use_thread_color = False
+
 
     # TODO: rename and generalize
     # TODO: tie tid/threadName and process/processName together so they start same color
@@ -171,22 +198,22 @@ class ColorFormatter(logging.Formatter):
     #       - also allows format to just expand a '%(threadName)s' in fmt string to '%(theadNameColor)s%(threadName)s%(reset)s' before regular formatter
     # DOWNSIDE: Filter would need to be attach to the Logger not the Handler
     def format(self, record):
-        record.reset = self.RESET_SEQ
+        record._cdl_reset = self.RESET_SEQ
         levelname = record.levelname
 
         if self.use_color:
             level_color = self.get_level_color(levelname)
-            record._dlc_levelname = level_color
+            record._cdl_levelname = level_color
 
         if self.use_color and self.use_thread_color:
             pname_color, pid_color, tname_color, tid_color = self.get_process_colors(record.processName, record.process, record.threadName, record.thread)
 
             # NOTE: and here is where we currently mutate the existing log record (we add attributes to it).
             # TODO: create a new/copy LogRecord, and only use it to pass to our use of logging.Formatter.format()
-            record._dlc_process = pid_color
-            record._dlc_processName = pname_color
-            record._dlc_thread = tid_color
-            record._dlc_threadName =tname_color
+            record._cdl_process = pid_color
+            record._cdl_processName = pname_color
+            record._cdl_thread = tid_color
+            record._cdl_threadName =tname_color
 
         return logging.Formatter.format(self, record)
 
