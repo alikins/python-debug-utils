@@ -23,38 +23,22 @@ def context_color_format_string(format_string):
 
     Note that adding those log record attributes is left to... <FIXME>.
     '''
-    # This is not very smart atm. Using format specifiers will break it. Really need to
-    # parse/tokenise the format string, and build it back with our tweaks eventually
-    # or possible regex instead of replace (s/(%\(process\).*d)/%(_dlc_process)<group 1>%(reset) etc)
-
-    # (%\(process\).*?d)
-    c_attrs = [('%(process)d', 'process', '(%\(process\).*?d)'),
-                ('%(processName)s', 'processName', 'adfad'),
-                ('%(thread)d', 'thread', 'adfad'),
-                ('%(threadName)s', 'threadName', 'adfad'),
-                ('%(levelname)s', 'levelname', 'aasdf')]
 
     color_attrs = ['process', 'processName', 'levelname', 'threadName', 'thread', 'message']
 
     color_attrs_string = '|'.join(color_attrs)
     print('color_attrs_string=%s' % color_attrs_string)
+
     re_string = "(?P<full_attr>%\((?P<attr_name>" + color_attrs_string + "%s?)\).*?[dsf])"
     print('re_string=%s' % re_string)
+
     color_format_re = re.compile(re_string)
-    replacement = "%(_cdl_\g<attr_name>)s\g<full_attr>%(_cdl_reset)s"
+
+    replacement = "%(_cdl_\g<attr_name>)s\g<full_attr>%(_cdl_unset)s"
+
     format_string = color_format_re.sub(replacement, format_string)
+    format_string = "%(_cdl_default)s" + format_string + "%(_cdl_reset)s"
     print('format_string=%s' % format_string)
-
-    return format_string
-
-    for c_attr, c_attr_short, c_re in c_attrs:
-        r_attr = '%%(_dlc_%s)s' % c_attr_short
-        reset_attr = '%(reset)s'
-        repl_string = r_attr + '\g<1>' + reset_attr
-        print('repl_string=%s' % repl_string)
-        format_string = re.sub(c_re, repl_string, format_string)
-        print('format_string=%s' % format_string)
-        #format_string = format_string.replace(c_attr, '%%(_dlc_%s)s%s%%(reset)s' % (c_attr_short, c_attr))
 
     return format_string
 
@@ -83,7 +67,7 @@ class ColorFormatter(logging.Formatter):
               """@%(filename)s"""
 #              """%(funcName)s()"""
               """:%(lineno)-4d """
-              """- %(_cdl_threadName)sthread_name_color%(_cdl_reset)s %(message)s""")
+              """- %(_cdl_thread)s%(message)s%(_cdl_reset)s""")
 #              """- $BOLD%(message)s$RESET""")
 
     COLORS = {
@@ -130,6 +114,8 @@ class ColorFormatter(logging.Formatter):
         self.thread_counter = 0
         self.use_thread_color = False
 
+        self.default_color = self.BASE_COLORS[self.WHITE]
+        #self.default_color = self.BASE_COLORS[self.YELLOW]
 
     # TODO: rename and generalize
     # TODO: tie tid/threadName and process/processName together so they start same color
@@ -199,6 +185,8 @@ class ColorFormatter(logging.Formatter):
     # DOWNSIDE: Filter would need to be attach to the Logger not the Handler
     def format(self, record):
         record._cdl_reset = self.RESET_SEQ
+        record._cdl_default = self.default_color
+        record._cdl_unset = self.default_color
         levelname = record.levelname
 
         if self.use_color:
@@ -214,6 +202,7 @@ class ColorFormatter(logging.Formatter):
             record._cdl_processName = pname_color
             record._cdl_thread = tid_color
             record._cdl_threadName =tname_color
+
 
         return logging.Formatter.format(self, record)
 
