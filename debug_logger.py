@@ -24,21 +24,49 @@ def context_color_format_string(format_string):
     Note that adding those log record attributes is left to... <FIXME>.
     '''
 
+    # TODO: pass in a list of record/logFormatter attributes to be wrapped for colorization
     color_attrs = ['name', 'process', 'processName', 'levelname', 'threadName', 'thread', 'message', 'exc_text']
 
     color_attrs_string = '|'.join(color_attrs)
 
+    # This looks for log format strings like '%(threadName)s' or '$(process)d, and replaces
+    # the format specifier with a version wrapped with log record color attributes.
+    #
+    # For ex, '%(threadName)s'  -> %(_cdl_threadName)s%(threadName)s%(cdl_reset)
+    #
+    # When ColorFormatter.format() is called on a LogRecord, this is equilivent to
+    # calling 'log_format_string % log_record.__dict__', and uses the normal (but 'old school')
+    # string formatting (ie, %s style). 'threadName' is populated automatically by a logging.Logger() class on .log(),
+    # but the custom fields like %(_cdl_threadName)s need to be added to the log record
+    # we pass to ColorFormatter.format()
+    #
+    # ColorFormatter.format() actually does this itself, but those attributes could be set else
+    # via a logger, a log adapter, a logging Filter attached to the logger, a filter attached
+    # to a logging.Handler, or by a logging handler itself. Since our attributes are purely for
+    # formatting, we just do it in the ColorFormatter.format()
+    ## https://docs.python.org/2/library/logging.html#logrecord-attributes
+    #
+    # THe captured groups 'full_attr' is the entire record attribute from the string, including
+    # string formatting/precsion, and padding info. ie '%(process)-10d' is a process pid right justified with
+    # a max length of 10 chars.
+    #
+    # The capture 'attr_name' is just the name of the attr, 'process' or 'message' or 'levelname' for ex. This
+    # is extract so it can be used in the name of the color debug logger attribute that will set the color info
+    # For '%(process)-10d', that would make 'process' the attr_name, and the color attribute '%(_cdl_process)'
+    # color_attrs_string is a sub regex of the attr names to be given color using the re alternate '|' notation.
     re_string = "(?P<full_attr>%\((?P<attr_name>" + color_attrs_string + "?)\).*?[dsf])"
 
     color_format_re = re.compile(re_string)
 
     replacement = "%(_cdl_\g<attr_name>)s\g<full_attr>%(_cdl_unset)s"
 
-    exc_info_post = '%(exc_text_sep)s%(exc_text)s'
-    format_string = '%s%s' % (format_string, exc_info_post)
+    # likely needs thread locking
+    #exc_info_post = '%(exc_text_sep)s%(exc_text)s'
+    #format_string = '%s%s' % (format_string, exc_info_post)
+
     format_string = color_format_re.sub(replacement, format_string)
 
-    #format_string = "%(_cdl_default)s" + format_string + "%(_cdl_reset)s"
+    format_string = "%(_cdl_default)s" + format_string + "%(_cdl_reset)s"
 
     return format_string
 
