@@ -19,29 +19,28 @@ def context_color_format_string(format_string):
 
     becomes
 
-    '%(_dlc_process)s%(process)d%(_dlc_reset)s %(_dlc_threadName)%(threadName)s%(_dlc_reset)s - %(msg)'
+    '%(_cdl_process)s%(process)d%(_cdl_reset)s %(_cdl_threadName)%(threadName)s%(_cdl_reset)s - %(msg)'
 
     Note that adding those log record attributes is left to... <FIXME>.
     '''
 
-    color_attrs = ['process', 'processName', 'levelname', 'threadName', 'thread', 'message']
+    color_attrs = ['name', 'process', 'processName', 'levelname', 'threadName', 'thread', 'message', 'exc_text']
 
     color_attrs_string = '|'.join(color_attrs)
-    print('color_attrs_string=%s' % color_attrs_string)
 
-    re_string = "(?P<full_attr>%\((?P<attr_name>" + color_attrs_string + "%s?)\).*?[dsf])"
-    print('re_string=%s' % re_string)
+    re_string = "(?P<full_attr>%\((?P<attr_name>" + color_attrs_string + "?)\).*?[dsf])"
 
     color_format_re = re.compile(re_string)
 
     replacement = "%(_cdl_\g<attr_name>)s\g<full_attr>%(_cdl_unset)s"
 
+    exc_info_post = '%(exc_text_sep)s%(exc_text)s'
+    format_string = '%s%s' % (format_string, exc_info_post)
     format_string = color_format_re.sub(replacement, format_string)
-    format_string = "%(_cdl_default)s" + format_string + "%(_cdl_reset)s"
-    print('format_string=%s' % format_string)
+
+    #format_string = "%(_cdl_default)s" + format_string + "%(_cdl_reset)s"
 
     return format_string
-
 
 class ColorFormatter(logging.Formatter):
     FORMAT = ("[$BOLD%(name)-20s$RESET][%(levelname)-18s]  "
@@ -56,14 +55,15 @@ class ColorFormatter(logging.Formatter):
     funcName = u""
     processName = u""
 
-    FORMAT = ("""%(asctime)-15s """
-              """[%(levelname)-8s] """
+    FORMAT = ("""%(asctime)-15s %(relativeCreated)d """
+              """%(levelname)-8s """
 #              """\033[1;35m%(name)s$RESET """
 #              """%(processName)s """
-              """%(processName)-15s %(process)5d """
-              """[tid: %(thread)d tname:%(threadName)-15s """
+              """%(processName)-15s %(_cdl_process)spid=%(process)5d """
+              """%(_cdl_thread)stid=%(thread)d %(_cdl_threadName)stname=%(threadName)-15s """
               #              """[tid: \033[32m%(thread)d$RESET tname:\033[32m%(threadName)s]$RESET """
 #              """%(module)s """
+              """[%(name)s] """
               """@%(filename)s"""
 #              """%(funcName)s()"""
               """:%(lineno)-4d """
@@ -170,7 +170,8 @@ class ColorFormatter(logging.Formatter):
             pid_color = self.get_thread_color(pid)
 
         if tname == 'MainThread':
-            tname_color = pname_color
+            #tname_color = pname_color
+            tname_color = pid_color
             tid_color = tname_color
         else:
             tname_color = self.get_name_color(tname)
@@ -184,14 +185,20 @@ class ColorFormatter(logging.Formatter):
     #       - also allows format to just expand a '%(threadName)s' in fmt string to '%(theadNameColor)s%(threadName)s%(reset)s' before regular formatter
     # DOWNSIDE: Filter would need to be attach to the Logger not the Handler
     def format(self, record):
+
+        # 'cdl' is 'context debug logger'. Mostly just an unlikely record name to avod name collisions.
         record._cdl_reset = self.RESET_SEQ
         record._cdl_default = self.default_color
         record._cdl_unset = self.default_color
-        levelname = record.levelname
+        record.exc_text_sep = ''
+        record.exc_text = ''
 
+        # NOTE: the impl here is based on info from justthe LogRecord and should be okay across threads
+        #       If this wants to use more global data, beware...
         if self.use_color:
-            level_color = self.get_level_color(levelname)
+            level_color = self.get_level_color(record.levelname)
             record._cdl_levelname = level_color
+            record._cdl_name = self.get_name_color(record.name)
 
         if self.use_color and self.use_thread_color:
             pname_color, pid_color, tname_color, tid_color = self.get_process_colors(record.processName, record.process, record.threadName, record.thread)
@@ -201,11 +208,36 @@ class ColorFormatter(logging.Formatter):
             record._cdl_process = pid_color
             record._cdl_processName = pname_color
             record._cdl_thread = tid_color
-            record._cdl_threadName =tname_color
+            record._cdl_threadName = tname_color
+            record._cdl_exc_text = record._cdl_thread
 
+        record._cdl_default = record._cdl_process
+        record._cdl_message = record._cdl_default
 
-        return logging.Formatter.format(self, record)
+        #record._cdl_exc_text = self.BASE_COLORS[self.YELLOW]
+        if record.exc_info:
+            record.exc_text_sep = '\n'
 
+        return self._format(record)
+
+    # format is based on from stdlib python logging.LogFormatter.format()
+    # It's kind of a pain to customize exception formatting, since it
+    # just appends the exception string from formatException() to the formatted message.
+    def _format(self, record):
+        record.message = record.getMessage()
+        if self.usesTime():
+            record.asctime = self.formatTime(record, self.datefmt)
+
+        if record.exc_info and not record.exc_text:
+            record.exc_text = self.formatException(record.exc_info)
+            #record.exc_text_placeholder = '\n'
+
+        #import pprint
+        #print('self._fmt=%s' % self._fmt)
+        #print('record.__dict__=')
+        #pprint.pprint(record.__dict__)
+        s = self._fmt % record.__dict__
+        return s
 
 def _get_handler():
     #%(asctime)s tid:%(thread)d
